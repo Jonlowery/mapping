@@ -1,3 +1,4 @@
 frontend/
 native-app/
 venv/
+backend/.env
