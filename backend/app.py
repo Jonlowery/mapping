@@ -18,37 +18,51 @@ load_dotenv()
 
 # ---------------- Flask App Initialization ----------------
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.getenv("JWT_SECRET", "change_me_please")
+
+# Secret key: support either SECRET_KEY or JWT_SECRET
+app.config["SECRET_KEY"] = (
+    os.getenv("SECRET_KEY")
+    or os.getenv("JWT_SECRET")
+    or "change_me_please"
+)
 
 CORS(app)
 
-# ---------------- Database Connection Details ----------------
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    # Fallback for local development if DATABASE_URL isn't set
-    DB_NAME = os.getenv("DB_NAME", "mapping_app_db")
-    DB_USER = os.getenv("DB_USER", "postgres")
-    DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-    DB_HOST = os.getenv("DB_HOST", "localhost")
-    DB_PORT = os.getenv("DB_PORT", "5432")
+# ---------------- Database Config ----------------
+DATABASE_URL = os.getenv("DATABASE_URL")  # preferred in production
+
+# Local fallbacks for dev
+DB_NAME = os.getenv("DB_NAME", "mapping_app_db")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
 
 # ---------------- OpenRouteService API Key ----------------
 ORS_API_KEY = os.getenv("ORS_API_KEY", "")
 
 # ---------------- Database Helper ----------------
 def get_db_connection():
-    """Establish a new DB connection."""
+    """
+    Use DATABASE_URL if present (Render/production),
+    otherwise fall back to individual DB_* vars (local dev).
+    """
     if DATABASE_URL:
-        return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-    else:
-        return psycopg2.connect(
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            host=DB_HOST,
-            port=DB_PORT,
-            cursor_factory=RealDictCursor
-        )
+        dsn = DATABASE_URL
+        # Optional: enforce TLS if using Render external URL and sslmode not present
+        if "render.com" in dsn and "sslmode=" not in dsn:
+            sep = "&" if "?" in dsn else "?"
+            dsn = f"{dsn}{sep}sslmode=require"
+        return psycopg2.connect(dsn, cursor_factory=RealDictCursor)
+    # Local connection
+    return psycopg2.connect(
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        host=DB_HOST,
+        port=DB_PORT,
+        cursor_factory=RealDictCursor,
+    )
 
 # ---------------- Auth Decorator ----------------
 def token_required(f):
@@ -149,7 +163,7 @@ def optimize_route(current_user):
 
     locations = [[banks_by_id[stop_id]["longitude"], banks_by_id[stop_id]["latitude"]] for stop_id in stop_ids]
 
-    # Build ORS optimization request
+    # Build ORS optimization request (using /optimization endpoint as you've been using)
     jobs = [{"id": idx, "location": locations[i]} for idx, i in enumerate(range(1, len(locations)), start=1)]
     vehicles = [{
         "id": 1,
