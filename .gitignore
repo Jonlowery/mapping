@@ -1,2 +1,8 @@
+# Node.js dependencies
+node_modules/
+
+# Python virtual environment
 venv/
+
+# Secrets file
 backend/.env
