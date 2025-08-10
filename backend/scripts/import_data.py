@@ -164,13 +164,8 @@ def main():
     """
     conn = None
     try:
-        conn = psycopg2.connect(
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            host=DB_HOST,
-            port=DB_PORT
-        )
+        conn = psycopg2.connect("dbname='mapping_test_jonlowery' user='jonlowery' password='zjsxpW8ei3itRP53gDjVKXJ4cVio4IDp' host='dpg-d2br2p3e5dus738gvv20-a.ohio-postgres.render.com' port='5432' sslmode='require'")
+
         print("Successfully connected to the database.")
         
         import_salespeople(conn)
