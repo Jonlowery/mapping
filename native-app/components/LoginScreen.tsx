@@ -4,9 +4,8 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants'; // NEW: to read API_URL from config
+import Constants from 'expo-constants';
 
-// ✅ Load API URL from app.json / app.config.js
 const API_URL = (Constants.expoConfig?.extra as any)?.API_URL as string;
 
 type LoginScreenProps = {
@@ -24,6 +23,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             setError('Email and password are required.');
             return;
         }
+
+        // --- THIS IS THE DEBUGGING LINE ---
+        console.log(`Attempting to connect to: ${API_URL}/auth/login`);
+        // ------------------------------------
 
         try {
             const response = await axios.post(`${API_URL}/auth/login`, {

@@ -43,11 +43,14 @@ export default {
     experiments: {
       typedRoutes: true
     },
+    // --- THIS SECTION IS UPDATED FOR PRODUCTION ---
     extra: {
+      API_URL: "https://mapping-lihi.onrender.com", // <-- UPDATED LIVE URL
       eas: {
         projectId: "41d2b3a8-8a3d-4957-bace-02264a8334a7"
       }
     },
+    // ------------------------------------------
     updates: {
       url: "https://u.expo.dev/41d2b3a8-8a3d-4957-bace-02264a8334a7"
     },
