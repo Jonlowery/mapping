@@ -1,0 +1,13 @@
+{
+  "build": {
+    "production": {
+      "node": "20.11.0",
+      "ios": {
+        "resourceClass": "m1-medium"
+      },
+      "npm": {
+        "ci": false
+      }
+    }
+  }
+}
