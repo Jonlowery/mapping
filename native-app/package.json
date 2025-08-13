@@ -2,7 +2,8 @@
   "name": "native-app",
   "main": "expo-router/entry",
   "version": "1.0.0",
-  "scripts": {
+ "scripts": {
+    "eas-build-pre-install": "../scripts/pre-install.sh",
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
