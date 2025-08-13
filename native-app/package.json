@@ -3,7 +3,7 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
  "scripts": {
-    "eas-build-pre-install": "../scripts/pre-install.sh",
+    "eas-build-pre-install": "mkdir -p node_modules",
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
