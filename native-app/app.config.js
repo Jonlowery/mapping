@@ -12,7 +12,9 @@ export default {
       supportsTablet: true,
       bundleIdentifier: "com.jonlowery.mappingapp",
       infoPlist: {
-        ITSAppUsesNonExemptEncryption: false
+        ITSAppUsesNonExemptEncryption: false,
+        // ✅ ADDED THIS LINE FOR LOCATION PERMISSIONS
+        NSLocationWhenInUseUsageDescription: "This app uses your location to show your position on the map and calculate routes."
       }
     },
     android: {

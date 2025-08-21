@@ -5,13 +5,13 @@ import {
   View, Text, StyleSheet, ActivityIndicator, Button, Linking, Platform, Alert,
   ScrollView, TouchableOpacity, TextInput, FlatList, Keyboard, SafeAreaView, KeyboardAvoidingView
 } from 'react-native';
+import ClusteredMapView from 'react-native-map-clustering';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
-import Constants from 'expo-constants'; // ✅ NEW
+import Constants from 'expo-constants';
 
-// ✅ Load API URL from app.json / app.config.ts
 const API_URL = (Constants.expoConfig?.extra as any)?.API_URL as string;
 
 const MAX_STOPS = 14;
@@ -32,6 +32,10 @@ type RouteCoordinate = { latitude: number; longitude: number; };
 
 type MapScreenProps = { onLogout: () => void; };
 
+// Robust coordinate validation
+const isValidCoord = (x: unknown, min: number, max: number) =>
+  typeof x === 'number' && Number.isFinite(x) && x >= min && x <= max;
+
 const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
   const mapRef = useRef<MapView | null>(null);
 
@@ -45,29 +49,33 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
   const [route, setRoute] = useState<RouteCoordinate[]>([]);
   const [isRouteLoading, setIsRouteLoading] = useState(false);
 
-  // Search (in bottom panel)
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Bank[]>([]);
 
-  // Nearby radius
   const [radius, setRadius] = useState<RadiusOption>(100);
 
-  // Location
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locError, setLocError] = useState<string | null>(null);
 
-  // Auto-fit flag (set when stops change, consumed after first successful draw)
   const shouldAutoFitRef = useRef(false);
 
-  // Fetch assigned banks (already filtered per logged-in user on backend)
+  // Fetch banks
   useEffect(() => {
     const init = async () => {
       try {
         const token = await AsyncStorage.getItem('token');
         if (!token) throw new Error('Authentication token not found.');
         const response = await axios.get(`${API_URL}/banks`, { headers: { 'x-access-token': token } });
-        setBanks(response.data);
-      } catch {
+
+        const allBanks: Bank[] = response.data;
+        const validBanks = allBanks.filter((bank: Bank) => {
+          const ok = isValidCoord(bank.latitude, -90, 90) && isValidCoord(bank.longitude, -180, 180);
+          if (!ok) console.log('Filtered out invalid bank record:', bank);
+          return ok;
+        });
+        setBanks(validBanks);
+      } catch (e) {
+        console.error('Bank fetch failed', e);
         setError('Failed to fetch bank data.');
       } finally {
         setIsLoading(false);
@@ -86,7 +94,8 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
         const center = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
         setUserLocation(center);
         setTimeout(() => {
-          mapRef.current?.animateCamera({ center, zoom: 11 }, { duration: 800 });
+          if (!mapRef.current) return;
+          mapRef.current.animateCamera({ center, zoom: 11 }, { duration: 800 });
         }, 300);
       } catch {
         setLocError('Could not determine current location.');
@@ -130,8 +139,6 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
   // ----- Auto optimize whenever routeStops changes -----
   useEffect(() => {
     let cancelled = false;
-
-    // mark that after this change and a successful draw, we should auto-fit once
     shouldAutoFitRef.current = true;
 
     const autoOptimize = async () => {
@@ -146,15 +153,19 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
         if (cancelled) return;
 
         const { optimized_stops, route_geometry } = response.data;
-        const formattedRoute = route_geometry.map((p: number[]) => ({ longitude: p[0], latitude: p[1] }));
-        setRouteStops(optimized_stops);
+        const formattedRoute: RouteCoordinate[] = route_geometry.map((p: number[]) => ({ longitude: p[0], latitude: p[1] }));
+
+        // guard against infinite loop if server returns slightly different order repeatedly
+        const sameOrder =
+          routeStops.length === optimized_stops.length &&
+          routeStops.every((s, i) => Number(s.id) === Number(optimized_stops[i].id));
+
+        if (!sameOrder) setRouteStops(optimized_stops);
         setRoute(formattedRoute);
 
-        // Center roughly on first stop immediately (quick feedback)
         const first = optimized_stops[0];
         if (first) centerOn(first.latitude, first.longitude, 10);
 
-        // Then auto-fit to whole route once (after the polyline is on screen)
         if (shouldAutoFitRef.current) {
           setTimeout(() => {
             fitToRoute();
@@ -169,14 +180,13 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
       }
     };
 
-    const t = setTimeout(autoOptimize, 350); // debounce
+    const t = setTimeout(autoOptimize, 350);
     return () => { cancelled = true; clearTimeout(t); };
   }, [routeStops]);
 
-  // ----- External navigation: start at current location, Stop 1 is first destination -----
+  // ----- External navigation -----
   const handleLaunchNavigation = () => {
     if (routeStops.length < 1) return;
-
     const hasUserLoc = !!userLocation;
     let stops = routeStops;
 
@@ -186,10 +196,7 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
     }
 
     if (Platform.OS === 'ios') {
-      const saddr = hasUserLoc
-        ? `${userLocation!.latitude},${userLocation!.longitude}`
-        : `${stops[0].latitude},${stops[0].longitude}`;
-
+      const saddr = hasUserLoc ? `${userLocation!.latitude},${userLocation!.longitude}` : `${stops[0].latitude},${stops[0].longitude}`;
       let daddr = `${stops[0].latitude},${stops[0].longitude}`;
       if (stops.length > 1) {
         for (let i = 1; i < stops.length; i++) {
@@ -199,10 +206,7 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
       const url = `http://maps.apple.com/?saddr=${encodeURIComponent(saddr)}&daddr=${encodeURIComponent(daddr)}`;
       Linking.openURL(url).catch(() => Alert.alert("Could not open Apple Maps", "An error occurred."));
     } else {
-      const origin = hasUserLoc
-        ? `${userLocation!.latitude},${userLocation!.longitude}`
-        : `${stops[0].latitude},${stops[0].longitude}`;
-
+      const origin = hasUserLoc ? `${userLocation!.latitude},${userLocation!.longitude}` : `${stops[0].latitude},${stops[0].longitude}`;
       const destination = `${stops[stops.length - 1].latitude},${stops[stops.length - 1].longitude}`;
       const waypointsList = stops.slice(0, stops.length - 1).map(s => `${s.latitude},${s.longitude}`);
       const waypoints = waypointsList.length ? `&waypoints=${encodeURIComponent(waypointsList.join('|'))}` : '';
@@ -227,10 +231,7 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
       const additions = nearby.filter(nb => !existing.has(Number(nb.id))).slice(0, available);
       const skipped = nearby.filter(nb => !existing.has(Number(nb.id))).length - additions.length;
       const next = [...prev, ...additions];
-      Alert.alert(
-        "Nearby Banks",
-        `${additions.length} added within ${radiusMiles} miles of ${bank.name}.${skipped > 0 ? ` ${skipped} skipped (route limit ${MAX_STOPS}).` : ''}`
-      );
+      Alert.alert("Nearby Banks", `${additions.length} added within ${radiusMiles} miles of ${bank.name}.${skipped > 0 ? ` ${skipped} skipped (route limit ${MAX_STOPS}).` : ''}`);
       return next;
     });
     centerOn(bank.latitude, bank.longitude, 9);
@@ -254,72 +255,67 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
   // ----- Fit to route (chip + helper) -----
   const fitToRoute = () => {
     const coords: { latitude: number; longitude: number }[] = [];
-
-    if (route.length > 0) {
-      coords.push(...route);
-    } else {
-      routeStops.forEach(s => coords.push({ latitude: s.latitude, longitude: s.longitude }));
-    }
-
+    if (route.length > 0) coords.push(...route);
+    else routeStops.forEach(s => coords.push({ latitude: s.latitude, longitude: s.longitude }));
     if (userLocation) coords.push(userLocation);
     if (coords.length === 0) return;
-
     mapRef.current?.fitToCoordinates(coords, {
       edgePadding: { top: 80, right: 40, bottom: 240, left: 40 },
       animated: true,
     });
   };
 
-  // ----- Render -----
   if (isLoading) {
     return (<View style={styles.centered}><ActivityIndicator size="large" /><Text>Loading Map...</Text></View>);
   }
-
   if (error) {
     return (<View style={styles.centered}><Text style={styles.errorText}>{error}</Text><Button title="Logout" onPress={onLogout} /></View>);
   }
 
-  const initialRegion =
-    userLocation
-      ? { latitude: userLocation.latitude, longitude: userLocation.longitude, latitudeDelta: 0.0922, longitudeDelta: 0.0421 }
-      : (banks.length > 0
-          ? { latitude: banks[0].latitude, longitude: banks[0].longitude, latitudeDelta: 0.0922, longitudeDelta: 0.0421 }
-          : { latitude: 39.5, longitude: -98.35, latitudeDelta: 20, longitudeDelta: 20 });
+  const initialRegion = userLocation
+    ? { latitude: userLocation.latitude, longitude: userLocation.longitude, latitudeDelta: 0.0922, longitudeDelta: 0.0421 }
+    : (banks.length > 0
+        ? { latitude: banks[0].latitude, longitude: banks[0].longitude, latitudeDelta: 0.0922, longitudeDelta: 0.0421 }
+        : { latitude: 39.5, longitude: -98.35, latitudeDelta: 20, longitudeDelta: 20 });
 
   return (
     <View style={styles.container}>
-      <MapView
-        ref={ref => (mapRef.current = ref)}
+      <ClusteredMapView
+        ref={(ref) => { mapRef.current = ref as unknown as MapView; }}
         style={styles.map}
         initialRegion={initialRegion}
         onPress={() => setSelectedBank(null)}
-        showsUserLocation={true}
+        showsUserLocation
+        clusterColor="#1E90FF"
       >
         {banks.map((bank) => {
           const inRoute = routeStops.some(stop => Number(stop.id) === Number(bank.id));
           const isStart = routeStops.length > 0 && Number(routeStops[0].id) === Number(bank.id);
+          const description = [bank.address_line_1, bank.city, bank.state].filter(Boolean).join(', ');
           return (
             <Marker
               key={String(bank.id)}
               coordinate={{ latitude: bank.latitude, longitude: bank.longitude }}
               pinColor={isStart ? '#1E90FF' : inRoute ? 'green' : undefined}
               title={bank.name}
-              description={`${bank.address_line_1}${bank.city ? `, ${bank.city}` : ''}${bank.state ? `, ${bank.state}` : ''}`}
-              onPress={(e) => { e.stopPropagation(); setSelectedBank(bank); }}
+              description={description}
+              onPress={(e) => { (e as any)?.stopPropagation?.(); setSelectedBank(bank); }}
+              tracksViewChanges={false}
             />
           );
         })}
-        {route.length > 0 && <Polyline coordinates={route} strokeColor="#007bff" strokeWidth={5} />}
-      </MapView>
 
-      {/* Top-right: Logout */}
+        {route.length > 0 && (
+          <Polyline coordinates={route} strokeColor="#007bff" strokeWidth={5} />
+        )}
+      </ClusteredMapView>
+
       <SafeAreaView pointerEvents="box-none" style={styles.overlayRoot}>
         <View style={styles.logoutButtonContainer}>
           <Button title="Logout" onPress={onLogout} color="#dc3545" />
         </View>
       </SafeAreaView>
 
-      {/* Bottom panels in a KeyboardAvoidingView so the keyboard doesn’t cover them */}
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={80}
@@ -329,21 +325,14 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
           <View style={styles.selectionPanel} pointerEvents="auto">
             <Text style={styles.panelTitle}>{selectedBank.name}</Text>
             <Text style={styles.panelAddress}>{selectedBank.address_line_1}</Text>
-
-            {/* Radius chips */}
             <Text style={styles.sectionLabel}>Nearby radius</Text>
             <View style={styles.radiusRow}>
               {RADIUS_OPTIONS.map(opt => (
-                <TouchableOpacity
-                  key={opt}
-                  style={[styles.radiusChip, radius === opt && styles.radiusChipActive]}
-                  onPress={() => setRadius(opt)}
-                >
+                <TouchableOpacity key={opt} style={[styles.radiusChip, radius === opt && styles.radiusChipActive]} onPress={() => setRadius(opt)}>
                   <Text style={[styles.radiusChipText, radius === opt && styles.radiusChipTextActive]}>{opt} mi</Text>
                 </TouchableOpacity>
               ))}
             </View>
-
             <View style={{ height: 8 }} />
             <Button title="Add to Route" onPress={() => addBankToRoute(selectedBank)} />
             <View style={{ height: 6 }} />
@@ -355,8 +344,6 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
               <Text style={styles.panelTitle}>Build Your Route</Text>
               {isRouteLoading ? <ActivityIndicator /> : null}
             </View>
-
-            {/* Search inside bottom panel */}
             <View style={styles.searchRow}>
               <TextInput
                 placeholder="Search by name, city, or state"
@@ -366,7 +353,6 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
                 returnKeyType="search"
               />
             </View>
-
             {searchQuery.length > 0 && (
               <FlatList
                 style={styles.searchResultsInPanel}
@@ -390,22 +376,14 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
                 ListEmptyComponent={<Text style={styles.emptyResults}>No matches</Text>}
               />
             )}
-
-            {/* Radius chips in routing panel */}
             <Text style={styles.sectionLabel}>Nearby radius</Text>
             <View style={styles.radiusRow}>
               {RADIUS_OPTIONS.map(opt => (
-                <TouchableOpacity
-                  key={opt}
-                  style={[styles.radiusChip, radius === opt && styles.radiusChipActive]}
-                  onPress={() => setRadius(opt)}
-                >
+                <TouchableOpacity key={opt} style={[styles.radiusChip, radius === opt && styles.radiusChipActive]} onPress={() => setRadius(opt)}>
                   <Text style={[styles.radiusChipText, radius === opt && styles.radiusChipTextActive]}>{opt} mi</Text>
                 </TouchableOpacity>
               ))}
             </View>
-
-            {/* Current route list */}
             {routeStops.length > 0 && (
               <>
                 <Text style={[styles.panelTitle, { marginTop: 8 }]}>Current Route ({routeStops.length}/{MAX_STOPS})</Text>
@@ -421,20 +399,15 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
                 </ScrollView>
               </>
             )}
-
-            {/* Fit-to-route chip */}
             <View style={styles.fitRow}>
               <TouchableOpacity onPress={fitToRoute} style={styles.fitChip} disabled={routeStops.length === 0 && route.length === 0}>
                 <Text style={styles.fitChipText}>Fit to Route</Text>
               </TouchableOpacity>
             </View>
-
-            {/* Only two primary buttons: Launch Nav & Clear */}
             <View style={styles.buttonRow}>
               <Button title="Launch Nav" onPress={handleLaunchNavigation} disabled={routeStops.length === 0} />
               <Button title="Clear" onPress={clearRoute} color="grey" />
             </View>
-
             {locError && <Text style={styles.locNote}>{locError}</Text>}
           </View>
         )}
@@ -446,43 +419,33 @@ const MapScreen: React.FC<MapScreenProps> = ({ onLogout }) => {
 const styles = StyleSheet.create({
   container: { ...StyleSheet.absoluteFillObject, backgroundColor: '#fff' },
   map: { ...StyleSheet.absoluteFillObject, zIndex: 0 },
-
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   errorText: { color: 'red', marginBottom: 10 },
-
   overlayRoot: { ...StyleSheet.absoluteFillObject, zIndex: 10 },
   logoutButtonContainer: {
     position: 'absolute', top: 10, right: 10,
     backgroundColor: 'white', borderRadius: 6, padding: 6, zIndex: 15,
     shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 4, shadowOffset: { width: 0, height: 2 },
   },
-
   kbWrapper: { ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end' },
-
-  // SELECTED BANK PANEL
   selectionPanel: {
     backgroundColor: 'white', padding: 16,
     borderTopLeftRadius: 16, borderTopRightRadius: 16,
     shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 10, shadowOffset: { width: 0, height: -2 },
   },
-
-  // ROUTING PANEL (default bottom sheet)
   routingPanel: {
     backgroundColor: 'white', borderTopLeftRadius: 16, borderTopRightRadius: 16,
     padding: 14,
     shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 10, shadowOffset: { width: 0, height: -2 },
   },
-
   panelTitle: { fontSize: 18, fontWeight: 'bold' },
   panelAddress: { fontSize: 14, color: 'grey', marginBottom: 8 },
-
   searchRow: {
     marginTop: 6, marginBottom: 8,
     backgroundColor: '#f4f4f4', borderRadius: 10, paddingHorizontal: 10, height: 40,
     justifyContent: 'center',
   },
   searchInput: { height: 40, fontSize: 15 },
-
   searchResultsInPanel: {
     maxHeight: 180, marginBottom: 8,
     backgroundColor: 'white', borderRadius: 8,
@@ -493,7 +456,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'
   },
   emptyResults: { padding: 10, color: '#666' },
-
   sectionLabel: { marginTop: 6, marginBottom: 4, fontSize: 12, color: '#555' },
   radiusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   radiusChip: {
@@ -503,19 +465,15 @@ const styles = StyleSheet.create({
   radiusChipActive: { borderColor: '#1E90FF', backgroundColor: '#E6F2FF' },
   radiusChipText: { fontSize: 12, color: '#333' },
   radiusChipTextActive: { color: '#1E90FF', fontWeight: '600' },
-
   fitRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 6 },
   fitChip: {
     borderWidth: 1, borderColor: '#1E90FF', backgroundColor: '#E6F2FF',
     borderRadius: 999, paddingVertical: 6, paddingHorizontal: 12,
   },
   fitChipText: { color: '#1E90FF', fontWeight: '600', fontSize: 12 },
-
   buttonRow: { flexDirection: 'row', justifyContent: 'space-around', marginTop: 10 },
-
   stopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 2 },
   removeText: { color: 'red', fontSize: 12 },
-
   locNote: { marginTop: 8, fontSize: 12, color: '#555' },
 });
 
